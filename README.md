@@ -1,5 +1,55 @@
 
 
+```
+bash <(curl -s https://raw.githubusercontent.com/2amir563/khodam-down-upload-instagram-youtube-x-facebook/main/setup.sh) install
+```
+
+مرحله 3: پیکربندی و راه‌اندازی
+bash
+# 1. رفتن به پوشه ربات
+```
+cd ~/khodam-bot
+```
+
+# 2. ویرایش تنظیمات
+```
+nano config.json
+```
+# توکن ربات تلگرام خود را وارد کنید
+
+# 3. شروع ربات
+
+```
+./start-background.sh
+```
+
+دستورات مدیریتی سریع
+پس از نصب، این دستورات ساده را استفاده کنید:
+
+کار	دستور
+وضعیت ربات	./status.sh
+شروع ربات	./start-background.sh
+توقف ربات	./stop.sh
+راه‌اندازی مجدد	./restart.sh
+توقف موقت 3 ساعت	./pause.sh 3
+ادامه کار	./resume.sh
+نمایش لاگ‌ها	./logs.sh
+ویرایش تنظیمات	./config-edit.sh
+زمان‌بندی روشن	./schedule.sh on 09:00 18:00
+زمان‌بندی خاموش	./schedule.sh off
+
+
+
+
+
+
+
+
+
+
+
+
+
  دستور نصب یک خطی در سرور
 ```
 bash <(curl -s https://raw.githubusercontent.com/2amir563/khodam-down-upload-instagram-youtube-x-facebook/main/manager.sh) install
