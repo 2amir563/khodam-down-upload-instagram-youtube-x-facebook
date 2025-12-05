@@ -4,6 +4,28 @@
 bash <(curl -s https://raw.githubusercontent.com/2amir563/khodam-down-upload-instagram-youtube-x-facebook/main/setup.sh) install
 ```
 
+
+📁 پوشه نصب: /root/khodam-bot
+
+📝 مراحل بعدی:
+1. تنظیم توکن ربات:
+   ```
+   cd /root/khodam-bot && nano config.json
+   ```
+
+2. شروع ربات:
+   ```
+   cd /root/khodam-bot && ./start-background.sh
+   ```
+
+3. دستورات مدیریت:
+   ./status.sh    # وضعیت ربات
+   ./stop.sh      # توقف ربات
+   ./pause.sh 3   # توقف 3 ساعته
+   ./restart.sh   # راه‌اندازی مجدد
+   ./logs.sh      # نمایش لاگ‌ها
+
+
 مرحله 3: پیکربندی و راه‌اندازی
 bash
 # 1. رفتن به پوشه ربات
