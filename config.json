@@ -1,0 +1,9 @@
+{
+    "telegram": {
+        "token": "8502213708:AAEd0o3wEEKWKNPqXjY5AoNIi6fEQiL4tf4",
+        "admin_ids": [123456789],
+        "max_file_size": 2000
+    },
+    "download_dir": "downloads",
+    "keep_files_days": 7
+}
