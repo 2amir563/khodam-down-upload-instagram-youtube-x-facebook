@@ -121,7 +121,7 @@ class QualityDownloadBot:
         with open(config_file, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=4, ensure_ascii=False)
         
-        return config  # اصلاح: باید config برگرداند نه default_config
+        return config
     
     def start_auto_cleanup(self):
         """Start auto cleanup thread"""
@@ -181,11 +181,20 @@ class QualityDownloadBot:
                 'quiet': True,
                 'no_warnings': True,
                 'extract_flat': False,
+                'socket_timeout': 30,
             }
             
-            # Instagram needs special handling
+            # Instagram needs cookies
             if platform == 'instagram':
-                ydl_opts['cookiefile'] = 'cookies.txt'
+                ydl_opts.update({
+                    'cookiefile': 'cookies.txt',
+                    'extractor_args': {
+                        'instagram': {
+                            'requested_formats': 'dash',
+                            'skip_dash_manifest': False,
+                        }
+                    }
+                })
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -205,11 +214,11 @@ class QualityDownloadBot:
                         if 'storyboard' in str(fmt.get('format_note', '')).lower():
                             continue
                         
-                        # Get file size (estimate if not available)
+                        # Get file size
                         filesize = fmt.get('filesize')
                         if not filesize and fmt.get('tbr') and info.get('duration'):
                             duration = info.get('duration', 60)
-                            filesize = (fmt['tbr'] * 1000 * duration) / 8  # Bytes
+                            filesize = (fmt['tbr'] * 1000 * duration) / 8
                         
                         if not filesize:
                             continue
@@ -241,7 +250,7 @@ class QualityDownloadBot:
                             'resolution': resolution,
                             'format_note': format_note,
                             'ext': ext,
-                            'filesize_mb': round(size_mb, 1),
+                            'filesize_mb': round(size_mb, 2),  # 2 decimal places
                             'quality': quality_label
                         })
                 
@@ -264,18 +273,18 @@ class QualityDownloadBot:
                 return formats[:8]
                 
         except Exception as e:
-            logger.error(f"Error getting formats: {e}")
+            logger.error(f"Error getting formats for {url}: {e}")
             return []
     
     def create_quality_keyboard(self, formats, platform):
         """Create keyboard for quality selection"""
         keyboard = []
         
-        if platform in ['youtube', 'instagram', 'twitter'] and formats:
+        if platform in ['youtube', 'twitter'] and formats:
             for fmt in formats:
                 quality_label = fmt['quality']
-                if len(quality_label) > 50:
-                    quality_label = quality_label[:47] + "..."
+                if len(quality_label) > 40:
+                    quality_label = quality_label[:37] + "..."
                 
                 callback_data = f"download_{platform}_{fmt['format_id']}"
                 keyboard.append([
@@ -293,8 +302,24 @@ class QualityDownloadBot:
                         callback_data="download_youtube_bestaudio"
                     )
                 ])
+        
+        # For Instagram, show fewer options
+        elif platform == 'instagram' and formats:
+            for fmt in formats[:3]:  # Only show top 3 for Instagram
+                quality_label = fmt['quality']
+                if len(quality_label) > 40:
+                    quality_label = quality_label[:37] + "..."
+                
+                callback_data = f"download_instagram_{fmt['format_id']}"
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"📸 {quality_label}",
+                        callback_data=callback_data
+                    )
+                ])
+        
         else:
-            # Default options if no formats
+            # Default option
             keyboard.append([
                 InlineKeyboardButton("📹 Best Quality", callback_data="download_generic_best")
             ])
@@ -326,19 +351,19 @@ Hello {user.first_name}! 👋
 
 📥 **Supported Platforms:**
 ✅ YouTube (choose quality with file size)
-✅ Instagram (choose quality with file size)
 ✅ Twitter/X (choose quality with file size)
+✅ Instagram (basic download)
 ✅ TikTok  
 ✅ Facebook
-✅ Direct files (keeps original format)
+✅ Direct files
 
 🎯 **How to use:**
-1. Send YouTube/Instagram/Twitter link → Choose quality
+1. Send YouTube/Twitter link → Choose quality
 2. Send other links → Auto download
 3. Send direct file → Keeps original format
 
 ⚡ **Features:**
-• Quality selection for YouTube/Instagram/Twitter
+• Quality selection for YouTube/Twitter
 • Shows file size for each quality
 • Auto cleanup every 2 minutes
 • Pause/Resume bot
@@ -372,7 +397,7 @@ Hello {user.first_name}! 👋
         text = update.message.text.strip()
         user = update.effective_user
         
-        logger.info(f"Message from {user.first_name}: {text[:50]}")
+        logger.info(f"Message from {user.id}: {text[:50]}")
         
         if text.startswith(('http://', 'https://')):
             platform = self.detect_platform(text)
@@ -381,7 +406,7 @@ Hello {user.first_name}! 👋
             context.user_data['last_url'] = text
             context.user_data['last_platform'] = platform
             
-            if platform in ['youtube', 'instagram', 'twitter']:
+            if platform in ['youtube', 'twitter']:
                 # Show quality selection
                 await update.message.reply_text(f"🔍 Getting available qualities from {platform}...")
                 formats = await self.get_video_formats(text, platform)
@@ -407,17 +432,22 @@ Hello {user.first_name}! 👋
                 else:
                     # Fallback if no formats
                     await update.message.reply_text("📥 Downloading with best quality...")
-                    await self.download_media(update, text, 'best', platform, query=None)
+                    await self.download_media(update, context, text, 'best', platform)
+            
+            elif platform == 'instagram':
+                # Instagram needs special handling
+                await update.message.reply_text("📸 Downloading from Instagram...")
+                await self.download_instagram(update, context, text)
             
             else:
-                # Other platforms or direct files
+                # Other platforms
                 await update.message.reply_text(f"📥 Downloading from {platform}...")
-                await self.download_media(update, text, 'best', platform, query=None)
+                await self.download_media(update, context, text, 'best', platform)
         
         else:
             await update.message.reply_text(
                 "Please send a valid URL starting with http:// or https://\n\n"
-                "🌟 **Special:** YouTube/Instagram/Twitter links show quality options!"
+                "🌟 **Special:** YouTube/Twitter links show quality options!"
             )
     
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -444,12 +474,22 @@ Hello {user.first_name}! 👋
                     return
                 
                 await query.edit_message_text(f"⏳ Downloading {format_id} quality...")
-                await self.download_media(update, url, format_id, platform, query)
+                
+                if platform == 'instagram':
+                    await self.download_instagram(update, context, url, query)
+                else:
+                    await self.download_media(update, context, url, format_id, platform, query)
     
-    async def download_media(self, update: Update, url, format_spec, platform, query=None):
+    async def download_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url, format_spec, platform, query=None):
         """Download media with specific format"""
         try:
-            chat_id = update.effective_chat.id
+            # Create progress message
+            if query:
+                progress_msg = query.message
+                chat_id = progress_msg.chat_id
+            else:
+                progress_msg = await update.message.reply_text("⏬ Starting download...")
+                chat_id = update.effective_chat.id
             
             # Prepare download options
             timestamp = int(time.time())
@@ -457,9 +497,12 @@ Hello {user.first_name}! 👋
                 'format': format_spec,
                 'quiet': False,
                 'outtmpl': str(self.download_dir / f'{timestamp}_%(title).100s.%(ext)s'),
+                'progress_hooks': [self.create_progress_hook(progress_msg)],
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
+                },
+                'socket_timeout': 30,
+                'retries': 3,
             }
             
             # Platform-specific options
@@ -470,17 +513,8 @@ Hello {user.first_name}! 👋
                 info = ydl.extract_info(url, download=True)
                 filename = ydl.prepare_filename(info)
                 
-                # Find actual file (yt-dlp might change extension)
-                actual_file = None
-                base_name = os.path.splitext(filename)[0]
-                
-                for ext in ['.mp4', '.mkv', '.webm', '.m4a', '.mp3', '.flv', '.avi']:
-                    if os.path.exists(base_name + ext):
-                        actual_file = base_name + ext
-                        break
-                
-                if not actual_file and os.path.exists(filename):
-                    actual_file = filename
+                # Find actual file
+                actual_file = self.find_downloaded_file(filename)
                 
                 if actual_file and os.path.exists(actual_file):
                     file_size = os.path.getsize(actual_file) / (1024 * 1024)
@@ -492,7 +526,7 @@ Hello {user.first_name}! 👋
                         if query:
                             await query.edit_message_text(error_msg)
                         else:
-                            await update.message.reply_text(error_msg)
+                            await progress_msg.edit_text(error_msg)
                         return
                     
                     # Send file to Telegram
@@ -506,10 +540,19 @@ Hello {user.first_name}! 👋
                     if query:
                         await query.edit_message_text(error_msg)
                     else:
-                        await update.message.reply_text(error_msg)
+                        await progress_msg.edit_text(error_msg)
                         
         except yt_dlp.utils.DownloadError as e:
-            error_msg = f"❌ Download error: {str(e)[:100]}"
+            error_msg = str(e)
+            if "Private video" in error_msg:
+                error_msg = "❌ Video is private or requires login"
+            elif "Unavailable" in error_msg:
+                error_msg = "❌ Video is unavailable"
+            elif "Too many requests" in error_msg:
+                error_msg = "❌ Rate limited. Please try again later"
+            elif "login" in error_msg.lower():
+                error_msg = "❌ Login required (Instagram needs cookies)"
+            
             if query:
                 await query.edit_message_text(error_msg)
             else:
@@ -517,12 +560,83 @@ Hello {user.first_name}! 👋
             logger.error(f"Download error: {e}")
         
         except Exception as e:
-            error_msg = f"❌ Error: {str(e)[:100]}"
+            error_msg = f"❌ Download failed: {str(e)[:100]}"
             if query:
                 await query.edit_message_text(error_msg)
             else:
                 await update.message.reply_text(error_msg)
-            logger.error(f"Error: {e}", exc_info=True)
+            logger.error(f"Unexpected error: {e}", exc_info=True)
+    
+    async def download_instagram(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url, query=None):
+        """Special handling for Instagram"""
+        try:
+            # Create progress message
+            if query:
+                progress_msg = query.message
+            else:
+                progress_msg = await update.message.reply_text("📸 Downloading from Instagram...")
+            
+            # Try with yt-dlp first
+            ydl_opts = {
+                'format': 'best',
+                'quiet': False,
+                'outtmpl': str(self.download_dir / '%(title).100s.%(ext)s'),
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15'
+                },
+                'socket_timeout': 30,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+                
+                actual_file = self.find_downloaded_file(filename)
+                
+                if actual_file and os.path.exists(actual_file):
+                    await self.send_telegram_file(update, actual_file, info, query)
+                    self.schedule_file_deletion(actual_file)
+                else:
+                    error_msg = "❌ Failed to download Instagram content"
+                    if query:
+                        await query.edit_message_text(error_msg)
+                    else:
+                        await progress_msg.edit_text(error_msg)
+                        
+        except Exception as e:
+            error_msg = f"❌ Instagram download failed: {str(e)[:100]}"
+            if query:
+                await query.edit_message_text(error_msg)
+            else:
+                await update.message.reply_text(error_msg)
+            logger.error(f"Instagram error: {e}")
+    
+    def create_progress_hook(self, progress_msg):
+        """Create progress hook for yt-dlp"""
+        def hook(d):
+            if d['status'] == 'downloading':
+                percent = d.get('_percent_str', '0%').strip()
+                speed = d.get('_speed_str', 'N/A')
+                eta = d.get('_eta_str', 'N/A')
+                
+                # We'll update in the main download function
+                pass
+        
+        return hook
+    
+    def find_downloaded_file(self, base_filename):
+        """Find the actual downloaded file"""
+        base = os.path.splitext(base_filename)[0]
+        
+        for ext in ['.mp4', '.mkv', '.webm', '.m4a', '.mp3', '.flv', '.avi', '.mov']:
+            test_file = base + ext
+            if os.path.exists(test_file):
+                return test_file
+        
+        if os.path.exists(base_filename):
+            return base_filename
+        
+        return None
     
     async def send_telegram_file(self, update, filepath, info, query=None):
         """Send file to Telegram with appropriate method"""
@@ -533,11 +647,11 @@ Hello {user.first_name}! 👋
             
             caption = f"✅ **Download Complete!**\n"
             caption += f"📁 **Title:** {title}\n"
-            caption += f"📊 **Size:** {file_size:.1f} MB"
+            caption += f"📊 **Size:** {file_size:.2f} MB"  # Fixed: 2 decimal places
             
             if duration > 0:
-                mins = duration // 60
-                secs = duration % 60
+                mins = int(duration) // 60
+                secs = int(duration) % 60
                 caption += f"\n⏱️ **Duration:** {mins}:{secs:02d}"
             
             # Determine file type
@@ -545,35 +659,67 @@ Hello {user.first_name}! 👋
             
             with open(filepath, 'rb') as f:
                 if file_ext in ['.mp3', '.m4a', '.opus', '.flac', '.wav']:
-                    await update.message.reply_audio(
-                        audio=f,
-                        caption=caption,
-                        title=title[:64],
-                        duration=int(duration),
-                        parse_mode='Markdown'
-                    )
+                    if query:
+                        await update.message.reply_audio(
+                            audio=f,
+                            caption=caption,
+                            title=title[:64],
+                            duration=int(duration),
+                            parse_mode='Markdown'
+                        )
+                    else:
+                        await update.message.reply_audio(
+                            audio=f,
+                            caption=caption,
+                            title=title[:64],
+                            duration=int(duration),
+                            parse_mode='Markdown'
+                        )
                 elif file_ext in ['.mp4', '.mkv', '.webm', '.mov', '.avi']:
-                    await update.message.reply_video(
-                        video=f,
-                        caption=caption,
-                        duration=int(duration),
-                        supports_streaming=True,
-                        parse_mode='Markdown'
-                    )
+                    if query:
+                        await update.message.reply_video(
+                            video=f,
+                            caption=caption,
+                            duration=int(duration),
+                            supports_streaming=True,
+                            parse_mode='Markdown'
+                        )
+                    else:
+                        await update.message.reply_video(
+                            video=f,
+                            caption=caption,
+                            duration=int(duration),
+                            supports_streaming=True,
+                            parse_mode='Markdown'
+                        )
                 elif file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
-                    await update.message.reply_photo(
-                        photo=f,
-                        caption=caption,
-                        parse_mode='Markdown'
-                    )
+                    if query:
+                        await update.message.reply_photo(
+                            photo=f,
+                            caption=caption,
+                            parse_mode='Markdown'
+                        )
+                    else:
+                        await update.message.reply_photo(
+                            photo=f,
+                            caption=caption,
+                            parse_mode='Markdown'
+                        )
                 else:
-                    await update.message.reply_document(
-                        document=f,
-                        caption=caption,
-                        parse_mode='Markdown'
-                    )
+                    if query:
+                        await update.message.reply_document(
+                            document=f,
+                            caption=caption,
+                            parse_mode='Markdown'
+                        )
+                    else:
+                        await update.message.reply_document(
+                            document=f,
+                            caption=caption,
+                            parse_mode='Markdown'
+                        )
             
-            success_msg = f"✅ File sent successfully!\n📊 Size: {file_size:.1f}MB"
+            success_msg = f"✅ File sent successfully!\n📊 Size: {file_size:.2f}MB"
             
             if query:
                 await query.edit_message_text(success_msg)
@@ -612,7 +758,8 @@ Hello {user.first_name}! 👋
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "📖 **Help**\n\n"
-            "Send YouTube/Instagram/Twitter link → Choose quality\n"
+            "Send YouTube/Twitter link → Choose quality\n"
+            "Send Instagram link → Auto download\n"
             "Send other links → Auto download\n"
             "Files auto deleted after 2 minutes",
             parse_mode='Markdown'
@@ -631,7 +778,7 @@ Hello {user.first_name}! 👋
             f"📊 **Status**\n\n"
             f"✅ Bot active\n"
             f"📁 Files in cache: {len(files)}\n"
-            f"💾 Cache size: {total_size:.1f}MB\n"
+            f"💾 Cache size: {total_size:.2f}MB\n"
             f"👤 Your ID: {user.id}",
             parse_mode='Markdown'
         )
@@ -685,7 +832,7 @@ Hello {user.first_name}! 👋
             except Exception as e:
                 logger.error(f"Error deleting {f}: {e}")
         
-        await update.message.reply_text(f"🧹 Cleaned {count} files ({total_size:.1f}MB)")
+        await update.message.reply_text(f"🧹 Cleaned {count} files ({total_size:.2f}MB)")
     
     def run(self):
         """Run the bot"""
@@ -706,7 +853,7 @@ Hello {user.first_name}! 👋
         print(f"✅ Max file size: {self.config['telegram']['max_file_size']}MB")
         print(f"✅ Download dir: {self.download_dir}")
         print("✅ Bot ready!")
-        print("📱 Send YouTube/Instagram link to test quality selection")
+        print("📱 Send YouTube/Twitter link to test quality selection")
         print("=" * 60)
         
         # Create application
@@ -787,18 +934,23 @@ case "$1" in
         fi
         
         source venv/bin/activate
-        > bot.log
+        
+        # Clear old log
+        > bot.log 2>/dev/null || true
+        
+        # Start bot
         nohup python bot.py >> bot.log 2>&1 &
         PID=$!
         echo $PID > bot.pid
         
-        echo "✅ Bot started (PID: $PID)"
+        echo "✅ Bot started successfully! (PID: $PID)"
         echo "📝 Logs: tail -f bot.log"
+        echo "📊 Status: ./manage.sh status"
         echo ""
-        echo "🎯 Features:"
-        echo "   • Quality selection for YouTube/Instagram/Twitter"
-        echo "   • Shows file sizes for each quality"
-        echo "   • Preserves original file formats"
+        echo "🎯 Features ready:"
+        echo "   • YouTube quality selection"
+        echo "   • Twitter quality selection"
+        echo "   • Instagram download"
         echo "   • Auto cleanup every 2 minutes"
         ;;
     stop)
@@ -830,9 +982,11 @@ case "$1" in
         ;;
     status)
         echo "📊 Bot Status:"
+        echo "==============="
+        
         if [ -f "bot.pid" ] && ps -p $(cat bot.pid) > /dev/null 2>&1; then
             PID=$(cat bot.pid)
-            echo "✅ Bot running (PID: $PID)"
+            echo "✅ Bot is RUNNING (PID: $PID)"
             echo "⏰ Uptime: $(ps -p $PID -o etime= | xargs)"
             
             # Check config
@@ -843,24 +997,27 @@ case "$1" in
                 echo "✅ Token: ${TOKEN:0:15}..."
             fi
             
+            # Show recent logs
             echo ""
-            echo "📝 Recent logs:"
+            echo "📝 Recent activity:"
             if [ -f "bot.log" ]; then
-                tail -5 bot.log
+                tail -10 bot.log | while read line; do
+                    echo "  $line"
+                done
             else
-                echo "No logs yet"
+                echo "  No log file yet"
+            fi
+            
+            # Show downloads
+            if [ -d "downloads" ]; then
+                COUNT=$(ls -1 downloads/ 2>/dev/null | wc -l)
+                SIZE=$(du -sh downloads/ 2>/dev/null | cut -f1)
+                echo "📁 Downloads cache: $COUNT files ($SIZE)"
             fi
             
         else
-            echo "❌ Bot not running"
+            echo "❌ Bot is NOT RUNNING"
             [ -f "bot.pid" ] && rm -f bot.pid
-        fi
-        
-        # Show downloads directory
-        if [ -d "downloads" ]; then
-            COUNT=$(ls -1 downloads/ 2>/dev/null | wc -l)
-            SIZE=$(du -sh downloads/ 2>/dev/null | cut -f1)
-            echo "📁 Downloads cache: $COUNT files ($SIZE)"
         fi
         ;;
     logs)
@@ -875,7 +1032,7 @@ case "$1" in
                 tail -50 bot.log
             fi
         else
-            echo "No log file"
+            echo "No log file found"
         fi
         ;;
     config)
@@ -897,7 +1054,7 @@ CONFIG
         
         nano config.json
         echo ""
-        echo "💡 Changes require restart: ./manage.sh restart"
+        echo "💡 Restart after changes: ./manage.sh restart"
         ;;
     test)
         echo "🔍 Testing installation..."
@@ -964,8 +1121,8 @@ except Exception as e:
         echo "   Check: ./manage.sh status"
         ;;
     debug)
-        echo "🐛 Starting bot in debug mode..."
-        ./manage.sh stop
+        echo "🐛 Starting in debug mode..."
+        ./manage.sh stop 2>/dev/null
         sleep 2
         source venv/bin/activate
         echo "Running bot with debug output..."
@@ -982,6 +1139,12 @@ except Exception as e:
         else
             echo "✅ Downloads directory already clean"
         fi
+        
+        # Clear logs
+        if [ "$2" = "--all" ]; then
+            > bot.log 2>/dev/null || true
+            echo "✅ Logs cleared"
+        fi
         ;;
     uninstall)
         echo "🗑️ Uninstalling bot..."
@@ -992,7 +1155,8 @@ except Exception as e:
         
         if [ "$CONFIRM" = "YES" ]; then
             ./manage.sh stop
-            cd /
+            
+            # Remove installation directory
             rm -rf /opt/quality-tg-bot
             
             # Remove from crontab
@@ -1008,7 +1172,7 @@ except Exception as e:
     autostart)
         echo "⚙️ Configuring auto-start on reboot..."
         
-        # Check if already in crontab
+        # Check if already configured
         if crontab -l 2>/dev/null | grep -q "/opt/quality-tg-bot/manage.sh start"; then
             echo "✅ Auto-start already configured"
         else
@@ -1042,9 +1206,9 @@ except Exception as e:
         echo "  autostart  - Auto-start on reboot"
         echo ""
         echo "🎯 Features:"
-        echo "  • Quality selection for YouTube/Instagram/Twitter"
-        echo "  • Shows file sizes for each quality"
-        echo "  • Preserves original file formats"
+        echo "  • YouTube quality selection with file sizes"
+        echo "  • Twitter quality selection"
+        echo "  • Instagram download"
         echo "  • Auto cleanup every 2 minutes"
         echo "  • Pause/Resume functionality"
         echo ""
@@ -1061,47 +1225,56 @@ EOF
 # Set execute permission
 chmod +x manage.sh
 
-# Step 8: Create requirements.txt
-print_blue "8. Creating requirements.txt..."
+# Create requirements.txt
 cat > requirements.txt << 'EOF'
 python-telegram-bot==20.7
 yt-dlp==2025.11.12
 requests==2.32.5
 EOF
 
+# Create cookies.txt template for Instagram
+cat > cookies_template.txt << 'EOF'
+# Instagram cookies file
+# Get cookies from browser and paste here
+# Format: netscape cookies format
+# Or use browser extension to export cookies
+EOF
+
 print_green "✅ QUALITY BOT INSTALLATION COMPLETE!"
 echo ""
 echo "=" * 60
-echo "📋 SETUP STEPS:"
+echo "📋 COMPLETE SETUP GUIDE"
 echo "=" * 60
 echo ""
-echo "1. Configure your bot:"
+echo "1. First, install the bot:"
+echo "   bash <(curl -s https://raw.githubusercontent.com/2amir563/khodam-down-upload-instagram-youtube-x-facebook/main/quality_install.sh)"
+echo ""
+echo "2. Configure the bot:"
 echo "   cd /opt/quality-tg-bot"
 echo "   nano config.json"
 echo ""
-echo "2. Replace 'YOUR_BOT_TOKEN_HERE' with your bot token"
-echo "   (Get token from @BotFather on Telegram)"
+echo "3. Replace 'YOUR_BOT_TOKEN_HERE' with your bot token"
+echo "   (Get from @BotFather on Telegram)"
 echo ""
-echo "3. Add your Telegram ID to 'admin_ids' array"
-echo "   (Find your ID by sending /id to @userinfobot)"
+echo "4. Add your Telegram ID to 'admin_ids' array"
+echo "   Example: \"admin_ids\": [123456789],"
+echo "   (Find your ID with @userinfobot)"
 echo ""
-echo "4. Start the bot:"
+echo "5. Set execute permission and start:"
+echo "   chmod +x manage.sh"
 echo "   ./manage.sh start"
 echo ""
-echo "5. Check status:"
+echo "6. Check status:"
 echo "   ./manage.sh status"
 echo ""
-echo "6. Test the bot in Telegram:"
+echo "7. Test the bot in Telegram:"
 echo "   Send /start to your bot"
-echo "   Send a YouTube link to test quality selection"
+echo "   Send a YouTube or Twitter link"
+echo "   Select quality and download!"
 echo ""
-echo "🔧 Troubleshooting:"
-echo "   ./manage.sh logs      # Check errors"
-echo "   ./manage.sh debug     # Run in foreground"
-echo "   ./manage.sh restart   # Restart bot"
-echo ""
-echo "🚀 Auto-start on reboot:"
-echo "   ./manage.sh autostart"
+echo "🔧 For Instagram (optional):"
+echo "   You may need to add cookies for Instagram downloads"
+echo "   Create cookies.txt file with your Instagram cookies"
 echo ""
 echo "📞 Support: GitHub @2amir563"
 echo "=" * 60
