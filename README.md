@@ -12,10 +12,7 @@
 bash <(curl -s https://raw.githubusercontent.com/2amir563/khodam-down-upload-instagram-youtube-x-facebook/main/quality_install.sh)
 ```
 
-bash
-```
-bash <(curl -s https://raw.githubusercontent.com/2amir563/khodam-down-upload-instagram-youtube-x-facebook/main/quality_install.sh)
-```
+
 پس از نصب:
 1. توکن را حتماً تنظیم کنید:
 bash
