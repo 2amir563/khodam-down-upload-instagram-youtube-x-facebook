@@ -182,7 +182,6 @@ class QualityDownloadBot:
                 'quiet': True,
                 'no_warnings': True,
                 'extract_flat': False,
-                'listformats': True,  # لیست فرمت‌ها را نمایش می‌دهد
             }
             
             formats = []
@@ -313,15 +312,6 @@ class QualityDownloadBot:
                             'filesize_mb': 8.0,
                             'quality': '360p - 8.0MB',
                             'height': 360
-                        },
-                        {
-                            'format_id': 'best[height<=240]',
-                            'resolution': '426x240',
-                            'format_note': '240p',
-                            'ext': 'mp4',
-                            'filesize_mb': 3.0,
-                            'quality': '240p - 3.0MB',
-                            'height': 240
                         }
                     ]
                 
@@ -355,11 +345,6 @@ class QualityDownloadBot:
                         'format_id': 'best[height<=360]',
                         'quality': '360p - 8.0MB',
                         'height': 360
-                    },
-                    {
-                        'format_id': 'best[height<=240]',
-                        'quality': '240p - 3.0MB',
-                        'height': 240
                     }
                 ]
             return []
@@ -398,10 +383,10 @@ class QualityDownloadBot:
                 InlineKeyboardButton("📹 Best Quality", callback_data="download_best")
             ])
             keyboard.append([
-                InlineKeyboardButton("📹 720p HD", callback_data="download_best[height<=720]")
+                InlineKeyboardButton("📹 720p HD", callback_data="download_720")
             ])
             keyboard.append([
-                InlineKeyboardButton("📹 480p SD", callback_data="download_best[height<=480]")
+                InlineKeyboardButton("📹 480p SD", callback_data="download_480")
             ])
         
         # Add cancel button
@@ -485,7 +470,7 @@ Hello {user.first_name}! 👋
             if platform in ['youtube', 'twitter']:
                 platform_display = "YouTube" if platform == 'youtube' else "Twitter/X 🐦"
                 # Show quality selection
-                await update.message.reply_text(f"🔍 Getting available qualities for {platform_display}...")
+                msg = await update.message.reply_text(f"🔍 Getting available qualities for {platform_display}...")
                 formats = await self.get_video_formats(text)
                 
                 if formats:
@@ -495,7 +480,10 @@ Hello {user.first_name}! 👋
                     for i, fmt in enumerate(formats[:5], 1):
                         info_text += f"{i}. {fmt['quality']}\n"
                     
-                    await update.message.reply_text(info_text, parse_mode='Markdown')
+                    try:
+                        await msg.edit_text(info_text, parse_mode='Markdown')
+                    except:
+                        pass  # Ignore "message not modified" error
                     
                     keyboard = self.create_quality_keyboard(formats, platform)
                     await update.message.reply_text(
@@ -509,13 +497,13 @@ Hello {user.first_name}! 👋
                     
                 else:
                     # Fallback if no formats
-                    await update.message.reply_text("📥 Downloading with best quality...")
+                    await msg.edit_text("📥 Downloading with best quality...")
                     await self.download_video(update, text, 'best')
             
             else:
                 # Other platforms or direct files
-                await update.message.reply_text("📥 Downloading...")
-                await self.process_url(update, text, platform)
+                msg = await update.message.reply_text("📥 Downloading...")
+                await self.process_url(update, text, platform, msg)
         
         else:
             await update.message.reply_text(
@@ -524,62 +512,147 @@ Hello {user.first_name}! 👋
             )
     
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle callback queries"""
+        """Handle callback queries - FIXED to avoid 'message not modified' error"""
         query = update.callback_query
         await query.answer()
         
         data = query.data
         
         if data == 'cancel':
-            await query.edit_message_text("❌ Download cancelled.")
+            try:
+                await query.edit_message_text("❌ Download cancelled.")
+            except:
+                pass  # Ignore "message not modified" error
             return
         
         if data.startswith('download_'):
             format_spec = data.replace('download_', '')
             
+            # Map simple quality names to yt-dlp format
+            if format_spec == '720':
+                format_spec = 'best[height<=720]'
+            elif format_spec == '480':
+                format_spec = 'best[height<=480]'
+            elif format_spec == 'best':
+                format_spec = 'best'
+            elif format_spec == 'bestaudio':
+                format_spec = 'bestaudio'
+            
             url = context.user_data.get('last_url')
             if not url:
-                await query.edit_message_text("❌ URL not found!")
+                try:
+                    await query.edit_message_text("❌ URL not found!")
+                except:
+                    pass
                 return
             
-            await query.edit_message_text(f"⏳ Downloading {format_spec}...")
-            await self.download_video(update, url, format_spec, query=query)
+            # Update status message with different text to avoid "not modified" error
+            try:
+                await query.edit_message_text(f"⏳ Starting download...")
+            except:
+                pass  # Ignore if message is the same
+            
+            await self.download_video_callback(query, url, format_spec)
     
-    async def download_video(self, update: Update, url, format_spec, query=None):
-        """Download video with specific format - FIXED VERSION"""
+    async def download_video_callback(self, query, url, format_spec):
+        """Download video from callback query - FIXED VERSION"""
         try:
-            # Determine if this is from callback or message
-            from_callback = query is not None
-            message = query.message if from_callback else update.message
+            # Update status with different text
+            try:
+                await query.edit_message_text(f"⏳ Preparing {format_spec}...")
+            except:
+                pass
             
-            if not message:
-                error_msg = "❌ Message not found!"
-                if query:
-                    await query.edit_message_text(error_msg)
+            # Create ydl options
+            ydl_opts = {
+                'format': format_spec,
+                'quiet': True,
+                'outtmpl': str(self.download_dir / '%(title).100s.%(ext)s'),
+                'progress_hooks': [lambda d: None],  # Dummy progress hook
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # First update message
+                try:
+                    await query.edit_message_text(f"📥 Downloading {format_spec}...")
+                except:
+                    pass
+                
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+                
+                # Fix extension for audio
+                if format_spec == 'bestaudio' and not filename.endswith(('.mp3', '.m4a')):
+                    base_name = os.path.splitext(filename)[0]
+                    filename = f"{base_name}.mp3"
+                
+                if os.path.exists(filename):
+                    file_size = os.path.getsize(filename) / (1024 * 1024)
+                    max_size = self.config['telegram']['max_file_size']
+                    
+                    if file_size > max_size:
+                        os.remove(filename)
+                        try:
+                            await query.edit_message_text(f"❌ File too large: {file_size:.1f}MB")
+                        except:
+                            pass
+                        return
+                    
+                    # Update status with different text
+                    try:
+                        await query.edit_message_text(f"📤 Uploading {file_size:.1f}MB...")
+                    except:
+                        pass
+                    
+                    # Send file
+                    with open(filename, 'rb') as f:
+                        if filename.endswith(('.mp3', '.m4a', '.wav', '.ogg', '.flac')):
+                            await query.message.reply_audio(
+                                audio=f,
+                                caption=f"🎵 {info.get('title', 'Audio')[:50]}\nSize: {file_size:.1f}MB | Format: {format_spec}"
+                            )
+                        else:
+                            await query.message.reply_video(
+                                video=f,
+                                caption=f"📹 {info.get('title', 'Video')[:50]}\nSize: {file_size:.1f}MB | Quality: {format_spec}",
+                                supports_streaming=True
+                            )
+                    
+                    # Final message with different text
+                    try:
+                        await query.edit_message_text(f"✅ Success! Downloaded {file_size:.1f}MB")
+                    except:
+                        pass
+                    
+                    # Schedule deletion
+                    self.schedule_file_deletion(filename)
+                    
                 else:
-                    await update.message.reply_text(error_msg)
-                return
+                    try:
+                        await query.edit_message_text("❌ File not found after download")
+                    except:
+                        pass
+                        
+        except Exception as e:
+            logger.error(f"Download error: {e}")
+            error_msg = f"❌ Error: {str(e)[:200]}"
+            try:
+                await query.edit_message_text(error_msg)
+            except:
+                pass
+    
+    async def download_video(self, update: Update, url, format_spec, msg=None):
+        """Download video from message"""
+        try:
+            if not msg:
+                msg = await update.message.reply_text("⏳ Starting download...")
             
-            # Update status message
-            status_msg = f"⏳ Downloading {format_spec}..."
-            if from_callback:
-                await query.edit_message_text(status_msg)
-            else:
-                status_message = await update.message.reply_text(status_msg)
-            
-            # Special handling for Twitter quality selection
-            if ('twitter.com' in url.lower() or 'x.com' in url.lower()) and 'height<=' in format_spec:
-                ydl_opts = {
-                    'format': format_spec,
-                    'quiet': True,
-                    'outtmpl': str(self.download_dir / '%(title).100s.%(ext)s'),
-                }
-            else:
-                ydl_opts = {
-                    'format': format_spec,
-                    'quiet': True,
-                    'outtmpl': str(self.download_dir / '%(title).100s.%(ext)s'),
-                }
+            # Create ydl options
+            ydl_opts = {
+                'format': format_spec,
+                'quiet': True,
+                'outtmpl': str(self.download_dir / '%(title).100s.%(ext)s'),
+            }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -591,59 +664,42 @@ Hello {user.first_name}! 👋
                     
                     if file_size > max_size:
                         os.remove(filename)
-                        error_msg = f"❌ File too large: {file_size:.1f}MB"
-                        if from_callback:
-                            await query.edit_message_text(error_msg)
-                        else:
-                            await status_message.edit_text(error_msg)
+                        await msg.edit_text(f"❌ File too large: {file_size:.1f}MB")
                         return
                     
-                    # Upload status
-                    upload_msg = f"📤 Uploading ({file_size:.1f}MB)..."
-                    if from_callback:
-                        await query.edit_message_text(upload_msg)
-                    else:
-                        await status_message.edit_text(upload_msg)
+                    await msg.edit_text(f"📤 Uploading ({file_size:.1f}MB)...")
                     
-                    # Send file - FIX: Use the correct message object
+                    # Send file
                     with open(filename, 'rb') as f:
                         if filename.endswith(('.mp3', '.m4a')):
-                            await message.reply_audio(
+                            await update.message.reply_audio(
                                 audio=f,
                                 caption=f"🎵 {info.get('title', 'Audio')[:50]}\nSize: {file_size:.1f}MB"
                             )
                         else:
-                            await message.reply_video(
+                            await update.message.reply_video(
                                 video=f,
                                 caption=f"📹 {info.get('title', 'Video')[:50]}\nSize: {file_size:.1f}MB",
                                 supports_streaming=True
                             )
                     
-                    success_msg = f"✅ Download complete! ({file_size:.1f}MB)"
-                    if from_callback:
-                        await query.edit_message_text(success_msg)
-                    else:
-                        await status_message.edit_text(success_msg)
+                    await msg.edit_text(f"✅ Download complete! ({file_size:.1f}MB)")
                     
                     # Schedule deletion
                     self.schedule_file_deletion(filename)
                     
                 else:
-                    error_msg = "❌ File not found"
-                    if from_callback:
-                        await query.edit_message_text(error_msg)
-                    else:
-                        await update.message.reply_text(error_msg)
+                    await msg.edit_text("❌ File not found")
                         
         except Exception as e:
             logger.error(f"Download error: {e}")
             error_msg = f"❌ Error: {str(e)[:200]}"
-            if query:
-                await query.edit_message_text(error_msg)
+            if msg:
+                await msg.edit_text(error_msg)
             else:
                 await update.message.reply_text(error_msg)
     
-    async def process_url(self, update: Update, url, platform):
+    async def process_url(self, update: Update, url, platform, msg):
         """Process generic URL or direct file"""
         try:
             # Try yt-dlp first for media
@@ -658,22 +714,25 @@ Hello {user.first_name}! 👋
                 filename = ydl.prepare_filename(info)
                 
                 if os.path.exists(filename):
-                    await self.send_file(update, filename, info.get('title', 'File'))
+                    await self.send_file(update, filename, info.get('title', 'File'), msg)
                 else:
                     # If yt-dlp fails, try direct download
-                    await self.download_direct_file(update, url)
+                    await self.download_direct_file(update, url, msg)
                     
-        except:
+        except Exception as e:
+            logger.error(f"yt-dlp error: {e}")
             # Fallback to direct download
-            await self.download_direct_file(update, url)
+            await self.download_direct_file(update, url, msg)
     
-    async def download_direct_file(self, update: Update, url):
+    async def download_direct_file(self, update: Update, url, msg):
         """Download direct file preserving format"""
         try:
+            await msg.edit_text("📥 Downloading direct file...")
+            
             # Get filename
             filename = os.path.basename(url.split('?')[0])
-            if not filename:
-                filename = f"file_{int(time.time())}"
+            if not filename or '.' not in filename:
+                filename = f"file_{int(time.time())}.mp4"
             
             filepath = self.download_dir / filename
             
@@ -682,57 +741,67 @@ Hello {user.first_name}! 👋
             response.raise_for_status()
             
             total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
             
             with open(filepath, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
+                        downloaded += len(chunk)
             
             file_size = os.path.getsize(filepath) / (1024 * 1024)
             max_size = self.config['telegram']['max_file_size']
             
             if file_size > max_size:
                 os.remove(filepath)
-                await update.message.reply_text(f"❌ File too large: {file_size:.1f}MB")
+                await msg.edit_text(f"❌ File too large: {file_size:.1f}MB")
                 return
             
             # Send with correct method
-            await self.send_file(update, str(filepath), filename)
+            await self.send_file(update, str(filepath), filename, msg)
             
             # Schedule deletion
             self.schedule_file_deletion(str(filepath))
             
         except Exception as e:
             logger.error(f"Direct download error: {e}")
-            await update.message.reply_text(f"❌ Download error: {str(e)[:100]}")
+            await msg.edit_text(f"❌ Download error: {str(e)[:100]}")
     
-    async def send_file(self, update: Update, filepath, title):
+    async def send_file(self, update: Update, filepath, title, msg):
         """Send file with appropriate method"""
-        file_size = os.path.getsize(filepath) / (1024 * 1024)
-        
-        with open(filepath, 'rb') as f:
-            if filepath.endswith(('.mp3', '.m4a', '.wav', '.ogg')):
-                await update.message.reply_audio(
-                    audio=f,
-                    caption=f"🎵 {title[:50]}\nSize: {file_size:.1f}MB"
-                )
-            elif filepath.endswith(('.mp4', '.avi', '.mkv', '.mov')):
-                await update.message.reply_video(
-                    video=f,
-                    caption=f"📹 {title[:50]}\nSize: {file_size:.1f}MB"
-                )
-            elif filepath.endswith(('.jpg', '.jpeg', '.png', '.gif')):
-                await update.message.reply_photo(
-                    photo=f,
-                    caption=f"🖼️ {title[:50]}\nSize: {file_size:.1f}MB"
-                )
-            else:
-                await update.message.reply_document(
-                    document=f,
-                    caption=f"📄 {title[:50]}\nSize: {file_size:.1f}MB"
-                )
-        
-        await update.message.reply_text(f"✅ Download complete! ({file_size:.1f}MB)")
+        try:
+            file_size = os.path.getsize(filepath) / (1024 * 1024)
+            
+            await msg.edit_text(f"📤 Uploading ({file_size:.1f}MB)...")
+            
+            with open(filepath, 'rb') as f:
+                if filepath.endswith(('.mp3', '.m4a', '.wav', '.ogg', '.flac')):
+                    await update.message.reply_audio(
+                        audio=f,
+                        caption=f"🎵 {title[:50]}\nSize: {file_size:.1f}MB"
+                    )
+                elif filepath.endswith(('.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv')):
+                    await update.message.reply_video(
+                        video=f,
+                        caption=f"📹 {title[:50]}\nSize: {file_size:.1f}MB",
+                        supports_streaming=True
+                    )
+                elif filepath.endswith(('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')):
+                    await update.message.reply_photo(
+                        photo=f,
+                        caption=f"🖼️ {title[:50]}\nSize: {file_size:.1f}MB"
+                    )
+                else:
+                    await update.message.reply_document(
+                        document=f,
+                        caption=f"📄 {title[:50]}\nSize: {file_size:.1f}MB"
+                    )
+            
+            await msg.edit_text(f"✅ Download complete! ({file_size:.1f}MB)")
+            
+        except Exception as e:
+            logger.error(f"Send file error: {e}")
+            await msg.edit_text(f"❌ Upload error: {str(e)[:100]}")
     
     def schedule_file_deletion(self, filepath):
         """Schedule file deletion after 2 minutes"""
@@ -742,12 +811,11 @@ Hello {user.first_name}! 👋
                 try:
                     os.remove(filepath)
                     logger.info(f"Auto deleted: {os.path.basename(filepath)}")
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Delete error: {e}")
         
         threading.Thread(target=delete_later, daemon=True).start()
     
-    # Other commands...
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "📖 **Help**\n\n"
@@ -832,6 +900,7 @@ Hello {user.first_name}! 👋
         
         if not self.token or self.token == 'YOUR_BOT_TOKEN_HERE':
             print("❌ ERROR: Configure token in config.json")
+            print("Edit: nano /opt/quality-tg-bot/config.json")
             return
         
         print(f"✅ Token: {self.token[:15]}...")
@@ -888,7 +957,8 @@ cat > manage.sh << 'MANAGEEOF'
 #!/bin/bash
 # manage.sh - Quality bot management
 
-cd "$(dirname "$0")"
+INSTALL_DIR="/opt/quality-tg-bot"
+cd "$INSTALL_DIR"
 
 case "$1" in
     start)
@@ -897,8 +967,8 @@ case "$1" in
         > bot.log
         nohup python bot.py >> bot.log 2>&1 &
         echo $! > bot.pid
-        echo "✅ Bot started (PID: $(cat bot.pid))"
-        echo "📝 Logs: tail -f bot.log"
+        echo "✅ Bot started (PID: \$(cat bot.pid))"
+        echo "📝 Logs: tail -f \$INSTALL_DIR/bot.log"
         echo ""
         echo "🎯 Features:"
         echo "   • Quality selection for YouTube/Twitter"
@@ -910,7 +980,7 @@ case "$1" in
     stop)
         echo "🛑 Stopping bot..."
         if [ -f "bot.pid" ]; then
-            kill $(cat bot.pid) 2>/dev/null
+            kill \$(cat bot.pid) 2>/dev/null
             rm -f bot.pid
             echo "✅ Bot stopped"
         else
@@ -925,8 +995,8 @@ case "$1" in
         ;;
     status)
         echo "📊 Bot Status:"
-        if [ -f "bot.pid" ] && ps -p $(cat bot.pid) > /dev/null 2>&1; then
-            echo "✅ Bot running (PID: $(cat bot.pid))"
+        if [ -f "bot.pid" ] && ps -p \$(cat bot.pid) > /dev/null 2>&1; then
+            echo "✅ Bot running (PID: \$(cat bot.pid))"
             echo "📝 Recent logs:"
             tail -5 bot.log 2>/dev/null || echo "No logs"
         else
@@ -980,18 +1050,6 @@ try:
         print(f'✅ Max size: {config[\"telegram\"][\"max_file_size\"]}MB')
 except Exception as e:
     print(f'❌ Config error: {e}')
-"
-        
-        echo ""
-        echo "3. Testing Twitter format detection..."
-        python3 -c "
-import yt_dlp
-try:
-    ydl_opts = {'quiet': True, 'listformats': True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        print('✅ yt-dlp ready for Twitter/X')
-except Exception as e:
-    print(f'❌ yt-dlp error: {e}')
 "
         ;;
     debug)
