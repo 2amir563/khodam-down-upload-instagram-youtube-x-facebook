@@ -147,7 +147,6 @@ class QualityDownloadBot:
         elif 'facebook.com' in url_lower or 'fb.com' in url_lower:
             return 'facebook'
         else:
-            # Check if it's a direct file
             file_extensions = ['.mp4', '.avi', '.mkv', '.mov', '.mp3', '.m4a', '.wav', 
                               '.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip', '.rar']
             for ext in file_extensions:
@@ -156,7 +155,6 @@ class QualityDownloadBot:
             return 'generic'
     
     async def get_video_formats(self, url, platform='youtube'):
-        """Get available formats with sizes"""
         try:
             ydl_opts = {
                 'quiet': True,
@@ -164,7 +162,6 @@ class QualityDownloadBot:
                 'extract_flat': False,
             }
             
-            # Different options for different platforms
             if platform == 'instagram':
                 ydl_opts['cookiefile'] = 'cookies.txt'
             
@@ -174,7 +171,6 @@ class QualityDownloadBot:
                 formats = []
                 if 'formats' in info:
                     for fmt in info['formats']:
-                        # Skip audio-only for video selection
                         if fmt.get('vcodec') == 'none' and fmt.get('acodec') != 'none':
                             continue
                         
@@ -182,13 +178,10 @@ class QualityDownloadBot:
                         if resolution == 'audio only':
                             continue
                         
-                        # Get file size
                         filesize = fmt.get('filesize')
-                        if not filesize:
-                            # Try to estimate size from bitrate
-                            if fmt.get('tbr') and info.get('duration'):
-                                duration = info.get('duration', 60)
-                                filesize = (fmt['tbr'] * 1000 * duration) / 8  # Bytes
+                        if not filesize and fmt.get('tbr') and info.get('duration'):
+                            duration = info.get('duration', 60)
+                            filesize = (fmt['tbr'] * 1000 * duration) / 8
                         
                         if not filesize:
                             continue
@@ -197,7 +190,6 @@ class QualityDownloadBot:
                         if not format_note and resolution != 'N/A':
                             format_note = resolution
                         
-                        # Calculate size
                         size_mb = filesize / (1024 * 1024)
                         max_size = self.config['telegram']['max_file_size']
                         
@@ -205,27 +197,22 @@ class QualityDownloadBot:
                             continue
                         
                         format_id = fmt.get('format_id', 'best')
-                        ext = fmt.get('ext', 'mp4')
                         
-                        # For Twitter/Instagram, show simplified quality
-                        if platform in ['twitter', 'instagram']:
-                            if resolution == 'N/A':
-                                quality_label = f"Quality - {size_mb:.1f}MB"
-                            else:
-                                quality_label = f"{resolution} - {size_mb:.1f}MB"
+                        if resolution == 'N/A' and format_note:
+                            quality_label = f"{format_note} - {size_mb:.1f}MB"
+                        elif resolution != 'N/A':
+                            quality_label = f"{resolution} - {size_mb:.1f}MB"
                         else:
-                            quality_label = f"{format_note} ({resolution}) - {size_mb:.1f}MB"
+                            quality_label = f"Unknown - {size_mb:.1f}MB"
                         
                         formats.append({
                             'format_id': format_id,
                             'resolution': resolution,
                             'format_note': format_note,
-                            'ext': ext,
                             'filesize_mb': round(size_mb, 1),
                             'quality': quality_label
                         })
                 
-                # Sort by quality (highest first)
                 def sort_key(fmt):
                     res = fmt['resolution']
                     if res == 'N/A':
@@ -240,7 +227,6 @@ class QualityDownloadBot:
                 
                 formats.sort(key=sort_key)
                 
-                # Remove duplicates (same resolution and similar size)
                 unique_formats = []
                 seen = set()
                 for fmt in formats:
@@ -249,10 +235,10 @@ class QualityDownloadBot:
                         seen.add(key)
                         unique_formats.append(fmt)
                 
-                return unique_formats[:6]  # Return top 6 formats
+                return unique_formats[:6]
                 
         except Exception as e:
-            logger.error(f"Error getting formats for {platform}: {e}")
+            logger.error(f"Error getting formats: {e}")
             return []
     
     def create_quality_keyboard(self, formats, platform):
@@ -279,21 +265,13 @@ class QualityDownloadBot:
                     InlineKeyboardButton(button_text, callback_data=callback_data)
                 ])
             
-            # Add audio option for YouTube
             if platform == 'youtube':
                 keyboard.append([
                     InlineKeyboardButton("🎵 MP3 Audio Only", callback_data="download_youtube_bestaudio")
                 ])
         else:
-            # Default options if no formats found
             keyboard.append([
                 InlineKeyboardButton("📹 Best Quality", callback_data=f"download_{platform}_best")
-            ])
-            keyboard.append([
-                InlineKeyboardButton("📹 Medium Quality", callback_data=f"download_{platform}_medium")
-            ])
-            keyboard.append([
-                InlineKeyboardButton("📹 Low Quality", callback_data=f"download_{platform}_worst")
             ])
         
         keyboard.append([
@@ -322,7 +300,7 @@ Hello {user.first_name}! 👋
 📥 **Supported Platforms:**
 ✅ YouTube (choose quality with file size)
 ✅ Twitter/X (choose quality with file size)
-✅ Instagram (choose quality)
+✅ Instagram (choose quality with file size)
 ✅ TikTok  
 ✅ Facebook
 ✅ Direct files
@@ -360,12 +338,12 @@ Hello {user.first_name}! 👋
         if text.startswith(('http://', 'https://')):
             platform = self.detect_platform(text)
             
-            # Save URL for callback
             context.user_data['last_url'] = text
             context.user_data['last_platform'] = platform
+            context.user_data['chat_id'] = update.effective_chat.id
+            context.user_data['message_id'] = update.message.message_id
             
             if platform in ['youtube', 'twitter', 'instagram']:
-                # Show quality selection
                 await update.message.reply_text(f"🔍 Getting available qualities from {platform}...")
                 formats = await self.get_video_formats(text, platform)
                 
@@ -388,18 +366,15 @@ Hello {user.first_name}! 👋
                     )
                     
                 else:
-                    # Fallback if no formats
                     await update.message.reply_text("📥 Downloading with best quality...")
-                    await self.download_media(update, context, text, 'best', platform)
+                    await self.download_media(update, context, text, 'best', platform, is_callback=False)
             
             elif platform == 'direct':
-                # Direct file download
                 await self.download_direct_file(update, context, text)
             
             else:
-                # Generic URL
                 await update.message.reply_text(f"📥 Processing {platform} link...")
-                await self.download_media(update, context, text, 'best', platform)
+                await self.download_media(update, context, text, 'best', platform, is_callback=False)
         
         else:
             await update.message.reply_text(
@@ -417,33 +392,42 @@ Hello {user.first_name}! 👋
             return
         
         if data.startswith('download_'):
-            # Parse: download_platform_format_id
             parts = data.split('_')
             if len(parts) >= 3:
                 platform = parts[1]
                 format_id = parts[2]
                 
                 url = context.user_data.get('last_url')
+                chat_id = context.user_data.get('chat_id')
+                message_id = context.user_data.get('message_id')
+                
                 if not url:
                     await query.edit_message_text("❌ URL not found!")
                     return
                 
-                await query.edit_message_text(f"⏳ Downloading...")
-                await self.download_media(update, context, url, format_id, platform, query)
+                await query.edit_message_text(f"⏳ Downloading {format_id}...")
+                
+                # Get the original message for sending file
+                try:
+                    original_message = await context.bot.get_chat(chat_id=chat_id)
+                except:
+                    original_message = None
+                
+                await self.download_media(update, context, url, format_id, platform, is_callback=True, query=query)
     
-    async def download_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url, format_spec, platform, query=None):
+    async def download_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url, format_spec, platform, is_callback=False, query=None):
         try:
-            # Prepare download options
+            chat_id = update.effective_chat.id
+            
             ydl_opts = {
                 'format': format_spec,
                 'quiet': True,
-                'outtmpl': str(self.download_dir / '%(title).100s.%(ext)s'),
+                'outtmpl': str(self.download_dir / '%(id)s_%(title).100s.%(ext)s'),
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 }
             }
             
-            # Platform-specific options
             if platform == 'instagram':
                 ydl_opts['cookiefile'] = 'cookies.txt'
             
@@ -451,70 +435,67 @@ Hello {user.first_name}! 👋
                 info = ydl.extract_info(url, download=True)
                 filename = ydl.prepare_filename(info)
                 
-                # Check if file exists (yt-dlp might change extension)
-                actual_filename = None
-                base_name = os.path.splitext(filename)[0]
+                # Find actual file
+                actual_file = self.find_downloaded_file(filename)
                 
-                # Try common extensions
-                for ext in ['.mp4', '.mkv', '.webm', '.m4a', '.mp3', '.flv', '.avi']:
-                    if os.path.exists(base_name + ext):
-                        actual_filename = base_name + ext
-                        break
-                
-                if not actual_filename and os.path.exists(filename):
-                    actual_filename = filename
-                
-                if actual_filename and os.path.exists(actual_filename):
-                    file_size = os.path.getsize(actual_filename) / (1024 * 1024)
+                if actual_file and os.path.exists(actual_file):
+                    file_size = os.path.getsize(actual_file) / (1024 * 1024)
                     max_size = self.config['telegram']['max_file_size']
                     
                     if file_size > max_size:
-                        os.remove(actual_filename)
+                        os.remove(actual_file)
                         error_msg = f"❌ File too large: {file_size:.1f}MB"
-                        if query:
+                        if is_callback and query:
                             await query.edit_message_text(error_msg)
                         else:
                             await update.message.reply_text(error_msg)
                         return
                     
-                    # Send file
-                    await self.send_file(update, actual_filename, info, query)
+                    # Send file - ALWAYS use update.message for sending files
+                    await self.send_file(update, actual_file, info, is_callback, query)
                     
                     # Schedule deletion
-                    threading.Thread(target=lambda: self.delete_file_later(actual_filename), daemon=True).start()
+                    threading.Thread(target=lambda: self.delete_file_later(actual_file), daemon=True).start()
                     
                 else:
                     error_msg = "❌ File not found after download"
-                    if query:
+                    if is_callback and query:
                         await query.edit_message_text(error_msg)
                     else:
                         await update.message.reply_text(error_msg)
                         
         except Exception as e:
-            logger.error(f"Download error for {platform}: {e}")
+            logger.error(f"Download error: {e}")
             error_msg = f"❌ Error: {str(e)[:100]}"
-            if query:
+            if is_callback and query:
                 await query.edit_message_text(error_msg)
             else:
                 await update.message.reply_text(error_msg)
     
+    def find_downloaded_file(self, base_filename):
+        base = os.path.splitext(base_filename)[0]
+        
+        for ext in ['.mp4', '.mkv', '.webm', '.m4a', '.mp3', '.flv', '.avi', '.mov']:
+            if os.path.exists(base + ext):
+                return base + ext
+        
+        if os.path.exists(base_filename):
+            return base_filename
+        
+        return None
+    
     async def download_direct_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url):
-        """Download direct file (like .mp4, .pdf, etc.)"""
         try:
             await update.message.reply_text("📥 Downloading file...")
             
-            # Get filename from URL
             filename = os.path.basename(url.split('?')[0])
             if not filename:
                 filename = f"file_{int(time.time())}"
             
             filepath = self.download_dir / filename
             
-            # Download file
             response = requests.get(url, stream=True, timeout=30)
             response.raise_for_status()
-            
-            total_size = int(response.headers.get('content-length', 0))
             
             with open(filepath, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -530,7 +511,7 @@ Hello {user.first_name}! 👋
                 return
             
             # Send file
-            await self.send_file(update, str(filepath), {'title': filename}, None)
+            await self.send_file(update, str(filepath), {'title': filename}, is_callback=False, query=None)
             
             # Schedule deletion
             threading.Thread(target=lambda: self.delete_file_later(str(filepath)), daemon=True).start()
@@ -539,16 +520,17 @@ Hello {user.first_name}! 👋
             logger.error(f"Direct download error: {e}")
             await update.message.reply_text(f"❌ Download error: {str(e)[:100]}")
     
-    async def send_file(self, update, filepath, info, query=None):
-        """Send file with appropriate method"""
+    async def send_file(self, update, filepath, info, is_callback=False, query=None):
+        """Send file to Telegram - FIXED VERSION"""
         try:
             file_size = os.path.getsize(filepath) / (1024 * 1024)
             title = info.get('title', os.path.basename(filepath))[:100]
             
-            caption = f"📁 **Title:** {title}\n"
+            caption = f"✅ **Download Complete!**\n"
+            caption += f"📁 **Title:** {title}\n"
             caption += f"📊 **Size:** {file_size:.1f}MB"
             
-            # Determine file type
+            # Get mime type
             mime_type, _ = mimetypes.guess_type(filepath)
             
             with open(filepath, 'rb') as f:
@@ -580,7 +562,7 @@ Hello {user.first_name}! 👋
                             parse_mode='Markdown'
                         )
                 else:
-                    # Fallback based on file extension
+                    # Fallback based on extension
                     if filepath.endswith(('.mp3', '.m4a', '.wav', '.flac')):
                         await update.message.reply_audio(
                             audio=f,
@@ -608,8 +590,9 @@ Hello {user.first_name}! 👋
                             parse_mode='Markdown'
                         )
             
-            success_msg = f"✅ Download complete! ({file_size:.1f}MB)"
-            if query:
+            success_msg = f"✅ File sent successfully! ({file_size:.1f}MB)"
+            
+            if is_callback and query:
                 await query.edit_message_text(success_msg)
             else:
                 await update.message.reply_text(success_msg)
@@ -617,20 +600,19 @@ Hello {user.first_name}! 👋
         except Exception as e:
             logger.error(f"Error sending file: {e}")
             error_msg = f"❌ Error sending file: {str(e)[:100]}"
-            if query:
+            if is_callback and query:
                 await query.edit_message_text(error_msg)
             else:
                 await update.message.reply_text(error_msg)
     
     def delete_file_later(self, filename):
-        time.sleep(120)  # 2 minutes
+        time.sleep(120)
         if os.path.exists(filename):
             try:
                 os.remove(filename)
             except:
                 pass
     
-    # Admin commands
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "📖 **Help**\n\n"
@@ -893,7 +875,7 @@ except Exception as e:
         echo "🎯 Features:"
         echo "  • YouTube quality selection with file sizes"
         echo "  • Twitter quality selection with file sizes"
-        echo "  • Instagram quality selection"
+        echo "  • Instagram quality selection with file sizes"
         echo "  • Direct file download"
         echo "  • Auto cleanup (2 minutes)"
         echo "  • Pause/Resume functionality"
