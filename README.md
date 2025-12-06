@@ -8,6 +8,10 @@
 برای اینستاگرام هم اگر امکان دانلود کیفیت های مختلف هست هم اینکار را بکن و به کد اضافه کن
 کد رابنویس من میخواهم درسرور خام اجرا کنم
 دستور نصب یک خطی برای سرور خام:
+```
+bash <(curl -s https://raw.githubusercontent.com/2amir563/khodam-down-upload-instagram-youtube-x-facebook/main/quality_install.sh)
+```
+
 bash
 ```
 bash <(curl -s https://raw.githubusercontent.com/2amir563/khodam-down-upload-instagram-youtube-x-facebook/main/quality_install.sh)
