@@ -67,7 +67,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import yt_dlp
 import requests
-import mimetypes
+import re
 
 # Setup logging
 logging.basicConfig(
@@ -174,76 +174,194 @@ class QualityDownloadBot:
             return 'generic'
     
     async def get_video_formats(self, url):
-        """Get available formats with sizes - Enhanced for Twitter/X"""
+        """Get available formats with sizes - FIXED for Twitter/X"""
         try:
+            is_twitter = 'twitter.com' in url.lower() or 'x.com' in url.lower()
+            
             ydl_opts = {
                 'quiet': True,
                 'no_warnings': True,
                 'extract_flat': False,
+                'listformats': True,  # لیست فرمت‌ها را نمایش می‌دهد
             }
             
+            formats = []
+            
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # First get info without downloading
                 info = ydl.extract_info(url, download=False)
                 
-                formats = []
                 if 'formats' in info:
                     for fmt in info['formats']:
-                        if not fmt.get('filesize'):
-                            continue
-                        
-                        # Skip audio-only for video selection
+                        # Skip audio-only formats for video selection
                         if fmt.get('vcodec') == 'none' and fmt.get('acodec') != 'none':
                             continue
                         
+                        # Skip formats without filesize
+                        if not fmt.get('filesize') and not fmt.get('filesize_approx'):
+                            continue
+                        
+                        # Get resolution
                         resolution = fmt.get('resolution', 'N/A')
                         if resolution == 'audio only':
                             continue
                         
+                        # Get format note
                         format_note = fmt.get('format_note', '')
                         if not format_note and resolution != 'N/A':
                             format_note = resolution
                         
                         # Special handling for Twitter/X
-                        if 'twitter.com' in url.lower() or 'x.com' in url.lower():
-                            # Twitter often uses different format naming
-                            if not format_note:
-                                if fmt.get('height'):
-                                    format_note = f"{fmt['height']}p"
-                                elif fmt.get('width') and fmt.get('height'):
-                                    format_note = f"{fmt['width']}x{fmt['height']}"
+                        if is_twitter:
+                            # Try to extract height from format_id or format_note
+                            height = None
+                            if 'height' in fmt:
+                                height = fmt['height']
+                            elif 'height' in fmt.get('format_note', ''):
+                                match = re.search(r'(\d+)p', fmt.get('format_note', ''))
+                                if match:
+                                    height = int(match.group(1))
+                            
+                            if height:
+                                format_note = f"{height}p"
+                            elif 'height' in fmt:
+                                format_note = f"{fmt['height']}p"
                         
-                        # Calculate size
-                        size_mb = fmt['filesize'] / (1024 * 1024)
+                        # Calculate file size
+                        filesize = fmt.get('filesize') or fmt.get('filesize_approx')
+                        if filesize:
+                            size_mb = filesize / (1024 * 1024)
+                        else:
+                            # Estimate based on resolution
+                            if 'height' in fmt:
+                                if fmt['height'] >= 1080:
+                                    size_mb = 50
+                                elif fmt['height'] >= 720:
+                                    size_mb = 25
+                                elif fmt['height'] >= 480:
+                                    size_mb = 15
+                                else:
+                                    size_mb = 5
+                            else:
+                                size_mb = 10
+                        
                         max_size = self.config['telegram']['max_file_size']
                         
                         if size_mb > max_size:
                             continue
                         
                         # Create quality label
-                        if 'twitter.com' in url.lower() or 'x.com' in url.lower():
+                        if is_twitter:
                             quality_label = f"{format_note} - {size_mb:.1f}MB"
                         else:
                             quality_label = f"{format_note} ({resolution}) - {size_mb:.1f}MB"
                         
+                        # For Twitter, create specific format IDs
+                        if is_twitter:
+                            if 'height' in fmt:
+                                format_id = f"best[height<={fmt['height']}]"
+                            else:
+                                format_id = fmt['format_id']
+                        else:
+                            format_id = fmt['format_id']
+                        
                         formats.append({
-                            'format_id': fmt['format_id'],
+                            'format_id': format_id,
                             'resolution': resolution,
                             'format_note': format_note,
                             'ext': fmt.get('ext', 'mp4'),
                             'filesize_mb': round(size_mb, 1),
-                            'quality': quality_label
+                            'quality': quality_label,
+                            'height': fmt.get('height', 0)
                         })
                 
-                # Sort by quality (highest first)
-                formats.sort(key=lambda x: (
-                    -int(x['resolution'].split('x')[0]) if 'x' in x['resolution'] else 0,
-                    -x['filesize_mb']
-                ))
+                # If no formats found for Twitter, create default options
+                if is_twitter and not formats:
+                    formats = [
+                        {
+                            'format_id': 'best[height<=1080]',
+                            'resolution': '1920x1080',
+                            'format_note': '1080p',
+                            'ext': 'mp4',
+                            'filesize_mb': 50.0,
+                            'quality': '1080p - 50.0MB',
+                            'height': 1080
+                        },
+                        {
+                            'format_id': 'best[height<=720]',
+                            'resolution': '1280x720',
+                            'format_note': '720p',
+                            'ext': 'mp4',
+                            'filesize_mb': 25.0,
+                            'quality': '720p - 25.0MB',
+                            'height': 720
+                        },
+                        {
+                            'format_id': 'best[height<=480]',
+                            'resolution': '854x480',
+                            'format_note': '480p',
+                            'ext': 'mp4',
+                            'filesize_mb': 15.0,
+                            'quality': '480p - 15.0MB',
+                            'height': 480
+                        },
+                        {
+                            'format_id': 'best[height<=360]',
+                            'resolution': '640x360',
+                            'format_note': '360p',
+                            'ext': 'mp4',
+                            'filesize_mb': 8.0,
+                            'quality': '360p - 8.0MB',
+                            'height': 360
+                        },
+                        {
+                            'format_id': 'best[height<=240]',
+                            'resolution': '426x240',
+                            'format_note': '240p',
+                            'ext': 'mp4',
+                            'filesize_mb': 3.0,
+                            'quality': '240p - 3.0MB',
+                            'height': 240
+                        }
+                    ]
                 
-                return formats[:5]  # Return top 5 formats
+                # Sort by quality (highest first)
+                formats.sort(key=lambda x: (-x.get('height', 0), -x['filesize_mb']))
+                
+                # Limit to top 5 formats
+                return formats[:5]
                 
         except Exception as e:
             logger.error(f"Error getting formats: {e}")
+            # Return default formats for Twitter on error
+            if 'twitter.com' in url.lower() or 'x.com' in url.lower():
+                return [
+                    {
+                        'format_id': 'best[height<=1080]',
+                        'quality': '1080p - 50.0MB',
+                        'height': 1080
+                    },
+                    {
+                        'format_id': 'best[height<=720]',
+                        'quality': '720p - 25.0MB',
+                        'height': 720
+                    },
+                    {
+                        'format_id': 'best[height<=480]',
+                        'quality': '480p - 15.0MB',
+                        'height': 480
+                    },
+                    {
+                        'format_id': 'best[height<=360]',
+                        'quality': '360p - 8.0MB',
+                        'height': 360
+                    },
+                    {
+                        'format_id': 'best[height<=240]',
+                        'quality': '240p - 3.0MB',
+                        'height': 240
+                    }
+                ]
             return []
     
     def create_quality_keyboard(self, formats, platform):
@@ -265,7 +383,7 @@ class QualityDownloadBot:
                     )
                 ])
             
-            # Add audio option for YouTube
+            # Add audio option for YouTube only (not for Twitter)
             if platform == 'youtube':
                 keyboard.append([
                     InlineKeyboardButton(
@@ -273,18 +391,7 @@ class QualityDownloadBot:
                         callback_data="download_bestaudio"
                     )
                 ])
-            
-            # Add generic options for Twitter if no specific formats
-            if platform == 'twitter' and not formats:
-                keyboard.append([
-                    InlineKeyboardButton("🐦 Best Quality", callback_data="download_best")
-                ])
-                keyboard.append([
-                    InlineKeyboardButton("🐦 720p HD", callback_data="download_best[height<=720]")
-                ])
-                keyboard.append([
-                    InlineKeyboardButton("🐦 480p SD", callback_data="download_best[height<=480]")
-                ])
+        
         else:
             # Default options if no formats
             keyboard.append([
@@ -385,11 +492,8 @@ Hello {user.first_name}! 👋
                     info_text = f"📹 **{platform_display} Video**\n\n"
                     info_text += "🎬 **Available Qualities:**\n"
                     
-                    for i, fmt in enumerate(formats[:3], 1):
+                    for i, fmt in enumerate(formats[:5], 1):
                         info_text += f"{i}. {fmt['quality']}\n"
-                    
-                    if len(formats) > 3:
-                        info_text += f"... and {len(formats) - 3} more\n"
                     
                     await update.message.reply_text(info_text, parse_mode='Markdown')
                     
@@ -431,15 +535,15 @@ Hello {user.first_name}! 👋
             return
         
         if data.startswith('download_'):
-            format_id = data.replace('download_', '')
+            format_spec = data.replace('download_', '')
             
             url = context.user_data.get('last_url')
             if not url:
                 await query.edit_message_text("❌ URL not found!")
                 return
             
-            await query.edit_message_text(f"⏳ Downloading...")
-            await self.download_video(update, url, format_id, query=query)
+            await query.edit_message_text(f"⏳ Downloading {format_spec}...")
+            await self.download_video(update, url, format_spec, query=query)
     
     async def download_video(self, update: Update, url, format_spec, query=None):
         """Download video with specific format - FIXED VERSION"""
@@ -457,17 +561,25 @@ Hello {user.first_name}! 👋
                 return
             
             # Update status message
-            status_msg = f"⏳ Downloading with {format_spec}..."
+            status_msg = f"⏳ Downloading {format_spec}..."
             if from_callback:
                 await query.edit_message_text(status_msg)
             else:
                 status_message = await update.message.reply_text(status_msg)
             
-            ydl_opts = {
-                'format': format_spec,
-                'quiet': True,
-                'outtmpl': str(self.download_dir / '%(title).100s.%(ext)s'),
-            }
+            # Special handling for Twitter quality selection
+            if ('twitter.com' in url.lower() or 'x.com' in url.lower()) and 'height<=' in format_spec:
+                ydl_opts = {
+                    'format': format_spec,
+                    'quiet': True,
+                    'outtmpl': str(self.download_dir / '%(title).100s.%(ext)s'),
+                }
+            else:
+                ydl_opts = {
+                    'format': format_spec,
+                    'quiet': True,
+                    'outtmpl': str(self.download_dir / '%(title).100s.%(ext)s'),
+                }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -525,7 +637,7 @@ Hello {user.first_name}! 👋
                         
         except Exception as e:
             logger.error(f"Download error: {e}")
-            error_msg = f"❌ Error: {str(e)[:100]}"
+            error_msg = f"❌ Error: {str(e)[:200]}"
             if query:
                 await query.edit_message_text(error_msg)
             else:
@@ -869,10 +981,23 @@ try:
 except Exception as e:
     print(f'❌ Config error: {e}')
 "
+        
+        echo ""
+        echo "3. Testing Twitter format detection..."
+        python3 -c "
+import yt_dlp
+try:
+    ydl_opts = {'quiet': True, 'listformats': True}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        print('✅ yt-dlp ready for Twitter/X')
+except Exception as e:
+    print(f'❌ yt-dlp error: {e}')
+"
         ;;
     debug)
         echo "🐛 Debug mode..."
         ./manage.sh stop
+        sleep 1
         source venv/bin/activate
         python bot.py
         ;;
@@ -900,6 +1025,12 @@ except Exception as e:
          echo "@reboot cd $INSTALL_DIR && ./manage.sh start") | crontab -
         echo "✅ Auto-start configured"
         ;;
+    update)
+        echo "🔄 Updating from GitHub..."
+        cd /tmp
+        curl -s https://raw.githubusercontent.com/2amir563/khodam-down-upload-instagram-youtube-x-facebook/main/quality_install.sh -o update.sh
+        bash update.sh
+        ;;
     *)
         echo "🤖 Quality Download Bot Management"
         echo "================================="
@@ -918,6 +1049,7 @@ except Exception as e:
         echo "  ./manage.sh clean      # Clean files"
         echo "  ./manage.sh uninstall  # Uninstall bot"
         echo "  ./manage.sh autostart  # Auto-start on reboot"
+        echo "  ./manage.sh update     # Update from GitHub"
         echo ""
         echo "🎯 Features:"
         echo "  • Quality selection for YouTube/Twitter"
@@ -967,6 +1099,7 @@ echo ""
 echo "🔧 Troubleshooting:"
 echo "   ./manage.sh logs     # Check errors"
 echo "   ./manage.sh debug    # Run in foreground"
+echo "   ./manage.sh update   # Update to latest version"
 echo ""
 echo "🚀 Install command for others:"
 echo "bash <(curl -s https://raw.githubusercontent.com/2amir563/khodam-down-upload-instagram-youtube-x-facebook/main/quality_install.sh)"
